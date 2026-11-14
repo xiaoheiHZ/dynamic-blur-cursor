@@ -29,7 +29,7 @@
 需要 Windows x64 和 .NET 8 SDK（或支持 .NET 8 的更新版 SDK）：
 
 ```powershell
-dotnet publish CursorBlur.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o publish
+dotnet publish CursorBlur.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -o publish
 ```
 
 生成的 `publish\CursorBlur.exe` 是可独立运行的文件。图标源于仓库内的 `make-icon.ps1`，运行脚本可以重新生成 `app.ico`。
