@@ -16,7 +16,7 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        if (args.Contains("--self-test")) { PointerTilt.SelfTest(); BlurOverlay.SelfTest(); return; }
+        if (args.Contains("--self-test")) { PointerTilt.SelfTest(); BlurOverlay.SelfTest(); CaretOverlay.SelfTest(); return; }
         if (args.Contains("--tilt-test")) { PointerTilt.SystemTest(); return; }
         if (args.Contains("--tilt-hold-test")) { PointerTilt.HoldTest(); return; }
         using var instance = new Mutex(true, "Local\\CursorBlur_Desktop_SingleInstance", out bool first);
@@ -28,6 +28,7 @@ internal static class Program
 internal sealed class Settings
 {
     public int Style { get; set; } = 0;
+    public int CaretStyle { get; set; } = 1;
     public int Opacity { get; set; } = 60;
     public int Lifetime { get; set; } = 230;
     public int Size { get; set; } = 100;
@@ -40,6 +41,7 @@ internal sealed class Settings
         try {
             var s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new();
             s.Style = Math.Clamp(s.Style, 0, 2); s.Opacity = Math.Clamp(s.Opacity, 10, 100);
+            s.CaretStyle = Math.Clamp(s.CaretStyle, 0, 3);
             s.Lifetime = Math.Clamp(s.Lifetime, 100, 600); s.Size = Math.Clamp(s.Size, 50, 180); s.Spacing = Math.Clamp(s.Spacing, 10, 50); s.TiltDegrees = Math.Clamp(s.TiltDegrees, 0, 45);
             return s;
         } catch { return new(); }
@@ -51,6 +53,7 @@ internal sealed class BlurContext : ApplicationContext
 {
     private readonly Settings settings = Settings.Load();
     private readonly BlurOverlay overlay;
+    private readonly CaretOverlay caret;
     private readonly NotifyIcon tray;
     private readonly ToolStripMenuItem toggle;
     private SettingsForm? settingsForm;
@@ -59,6 +62,7 @@ internal sealed class BlurContext : ApplicationContext
     {
         appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
         overlay = new BlurOverlay(settings);
+        caret = new CaretOverlay(settings);
         toggle = new ToolStripMenuItem("暂停特效", null, (_, _) => Toggle());
         var menu = new ContextMenuStrip();
         menu.Items.Add("个性化设置…", null, (_, _) => ShowSettings());
@@ -68,6 +72,7 @@ internal sealed class BlurContext : ApplicationContext
         tray = new NotifyIcon { Icon = appIcon, Text = "动态模糊光标", ContextMenuStrip = menu, Visible = true };
         tray.DoubleClick += (_, _) => ShowSettings();
         overlay.Show();
+        caret.Show();
         if (openSettings) ShowSettings();
     }
     private void ShowSettings()
@@ -76,8 +81,8 @@ internal sealed class BlurContext : ApplicationContext
         settingsForm = new SettingsForm(settings, appIcon);
         settingsForm.Show();
     }
-    private void Toggle() { overlay.EnabledEffect = !overlay.EnabledEffect; toggle.Text = overlay.EnabledEffect ? "暂停特效" : "启用特效"; tray.Text = overlay.EnabledEffect ? "动态模糊光标" : "动态模糊光标（已暂停）"; }
-    protected override void ExitThreadCore() { settingsForm?.Close(); tray.Visible = false; tray.Dispose(); overlay.Close(); overlay.Dispose(); appIcon.Dispose(); base.ExitThreadCore(); }
+    private void Toggle() { overlay.EnabledEffect = !overlay.EnabledEffect; caret.EnabledEffect = overlay.EnabledEffect; toggle.Text = overlay.EnabledEffect ? "暂停特效" : "启用特效"; tray.Text = overlay.EnabledEffect ? "动态模糊光标" : "动态模糊光标（已暂停）"; }
+    protected override void ExitThreadCore() { settingsForm?.Close(); tray.Visible = false; tray.Dispose(); caret.Dispose(); overlay.Close(); overlay.Dispose(); appIcon.Dispose(); base.ExitThreadCore(); }
 }
 
 internal static class Startup
@@ -101,6 +106,7 @@ internal sealed class SettingsForm : Form
 {
     private readonly Settings settings;
     private readonly ComboBox style = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly ComboBox caretStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, AccessibleName = "文本光标动画" };
     private readonly TrackBar opacity = Slider(10, 100, 10), lifetime = Slider(100, 600, 100), size = Slider(50, 180, 20), spacing = Slider(10, 50, 10), tilt = Slider(0, 45, 5);
     private readonly Button color = new() { Text = "选择柔光颜色", AutoSize = true, FlatStyle = FlatStyle.Flat };
     private readonly CheckBox startup = new() { Text = "登录 Windows 后自动启动", AutoSize = true, Dock = DockStyle.Fill };
@@ -109,10 +115,11 @@ internal sealed class SettingsForm : Form
     {
         this.settings = settings; Text = "动态模糊光标 · 个性化"; Icon = icon;
         Font = new Font("Microsoft YaHei UI", 9f); BackColor = Color.FromArgb(247, 249, 255); ForeColor = Color.FromArgb(32, 39, 62);
-        ClientSize = new Size(520, 592); MinimumSize = new Size(500, 617); StartPosition = FormStartPosition.CenterScreen;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 14), ColumnCount = 2, RowCount = 11, AutoSize = false };
+        ClientSize = new Size(520, 616); MinimumSize = new Size(500, 641); StartPosition = FormStartPosition.CenterScreen;
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 14), ColumnCount = 2, RowCount = 12, AutoSize = false };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 135)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         for (int i = 0; i < 5; i++) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 57));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
@@ -120,21 +127,24 @@ internal sealed class SettingsForm : Form
         var title = new Label { Text = "让光标留下漂亮的轨迹", Font = new Font(Font.FontFamily, 14f, FontStyle.Bold), AutoSize = true, Dock = DockStyle.Fill };
         layout.Controls.Add(title, 0, 0); layout.SetColumnSpan(title, 2);
         style.Items.AddRange(new object[] { "跟随指针 + 柔光", "跟随指针", "柔光线条" });
-        AddRow(layout, 1, "拖影样式", style);
-        AddSlider(layout, 2, "拖影不透明度", opacity, "%");
-        AddSlider(layout, 3, "消散时间", lifetime, " 毫秒");
-        AddSlider(layout, 4, "指针拖影大小", size, "%");
-        AddSlider(layout, 5, "拖影间距", spacing, " px");
-        AddSlider(layout, 6, "指针倾斜幅度", tilt, "°（0 为关闭）");
-        AddRow(layout, 7, "柔光颜色", color);
-        layout.Controls.Add(startup, 0, 8); layout.SetColumnSpan(startup, 2);
+        AddRow(layout, 1, "鼠标拖影样式", style);
+        caretStyle.Items.AddRange(new object[] { "关闭", "Springy · Neovide", "Springy · Subtle", "Springy · Zed" });
+        AddRow(layout, 2, "文本光标动画", caretStyle);
+        AddSlider(layout, 3, "拖影不透明度", opacity, "%");
+        AddSlider(layout, 4, "消散时间", lifetime, " 毫秒");
+        AddSlider(layout, 5, "指针拖影大小", size, "%");
+        AddSlider(layout, 6, "拖影间距", spacing, " px");
+        AddSlider(layout, 7, "指针倾斜幅度", tilt, "°（0 为关闭）");
+        AddRow(layout, 8, "柔光颜色", color);
+        layout.Controls.Add(startup, 0, 9); layout.SetColumnSpan(startup, 2);
         var note = new Label { Text = "更改立即生效，设置会自动保存。", AutoSize = true, ForeColor = Color.FromArgb(100, 110, 132), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-        layout.Controls.Add(note, 0, 9); layout.SetColumnSpan(note, 2);
+        layout.Controls.Add(note, 0, 10); layout.SetColumnSpan(note, 2);
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var close = new Button { Text = "完成", AutoSize = true, FlatStyle = FlatStyle.System }; close.Click += (_, _) => Close();
-        var reset = new Button { Text = "恢复默认", AutoSize = true, FlatStyle = FlatStyle.System }; reset.Click += (_, _) => { var d = new Settings(); settings.Style=d.Style; settings.Opacity=d.Opacity; settings.Lifetime=d.Lifetime; settings.Size=d.Size; settings.Spacing=d.Spacing; settings.TiltDegrees=d.TiltDegrees; settings.ColorArgb=d.ColorArgb; LoadControls(); Save(); };
-        buttons.Controls.Add(close); buttons.Controls.Add(reset); layout.Controls.Add(buttons, 0, 10); layout.SetColumnSpan(buttons, 2);
+        var reset = new Button { Text = "恢复默认", AutoSize = true, FlatStyle = FlatStyle.System }; reset.Click += (_, _) => { var d = new Settings(); settings.Style=d.Style; settings.CaretStyle=d.CaretStyle; settings.Opacity=d.Opacity; settings.Lifetime=d.Lifetime; settings.Size=d.Size; settings.Spacing=d.Spacing; settings.TiltDegrees=d.TiltDegrees; settings.ColorArgb=d.ColorArgb; LoadControls(); Save(); };
+        buttons.Controls.Add(close); buttons.Controls.Add(reset); layout.Controls.Add(buttons, 0, 11); layout.SetColumnSpan(buttons, 2);
         style.SelectedIndexChanged += (_, _) => Save();
+        caretStyle.SelectedIndexChanged += (_, _) => Save();
         foreach (var t in new[] { opacity, lifetime, size, spacing, tilt }) t.ValueChanged += (_, _) => Save();
         color.Click += (_, _) => { using var picker = new ColorDialog { Color = Color.FromArgb(settings.ColorArgb), FullOpen = true }; if (picker.ShowDialog(this) == DialogResult.OK) { settings.ColorArgb = picker.Color.ToArgb(); UpdateColor(); Save(); } };
         startup.CheckedChanged += (_, _) => {
@@ -157,9 +167,9 @@ internal sealed class SettingsForm : Form
         slider.ValueChanged += (_, _) => val.Text = slider.Value + suffix;
         panel.Controls.Add(slider, 0, 0); panel.Controls.Add(val, 1, 0); AddRow(table, row, caption, panel);
     }
-    private void LoadControls() { loading = true; style.SelectedIndex = settings.Style; opacity.Value = settings.Opacity; lifetime.Value = settings.Lifetime; size.Value = settings.Size; spacing.Value = settings.Spacing; tilt.Value = settings.TiltDegrees; startup.Checked = Startup.Enabled(); UpdateColor(); loading = false; }
+    private void LoadControls() { loading = true; style.SelectedIndex = settings.Style; caretStyle.SelectedIndex = settings.CaretStyle; opacity.Value = settings.Opacity; lifetime.Value = settings.Lifetime; size.Value = settings.Size; spacing.Value = settings.Spacing; tilt.Value = settings.TiltDegrees; startup.Checked = Startup.Enabled(); UpdateColor(); loading = false; }
     private void UpdateColor() { color.BackColor = Color.FromArgb(settings.ColorArgb); var c = color.BackColor; color.ForeColor = c.GetBrightness() < .45 ? Color.White : Color.Black; }
-    private void Save() { if (loading) return; settings.Style = style.SelectedIndex; settings.Opacity = opacity.Value; settings.Lifetime = lifetime.Value; settings.Size = size.Value; settings.Spacing = spacing.Value; settings.TiltDegrees = tilt.Value; settings.Save(); }
+    private void Save() { if (loading) return; settings.Style = style.SelectedIndex; settings.CaretStyle = caretStyle.SelectedIndex; settings.Opacity = opacity.Value; settings.Lifetime = lifetime.Value; settings.Size = size.Value; settings.Spacing = spacing.Value; settings.TiltDegrees = tilt.Value; settings.Save(); }
 }
 
 internal sealed class BlurOverlay : Form
@@ -268,11 +278,12 @@ internal sealed class BlurOverlay : Form
     { if(alpha<1)return; using var pen=new Pen(Color.FromArgb(Math.Clamp(alpha,0,255),color),width){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round}; g.DrawLine(pen,a,b); }
     private void ClearOverlay() { if(!wasDrawn||!IsHandleCreated)return; using var blank=new Bitmap(1,1,PixelFormat.Format32bppPArgb); SetBitmap(blank,last.X,last.Y); wasDrawn=false; }
     protected override void Dispose(bool disposing) { if(disposing) { timer.Dispose(); pointerTilt.Dispose(); cursorImage?.Dispose(); } base.Dispose(disposing); }
-    private void SetBitmap(Bitmap bitmap,int x,int y)
+    private void SetBitmap(Bitmap bitmap,int x,int y) => SetBitmap(Handle, bitmap, x, y);
+    internal static void SetBitmap(IntPtr window, Bitmap bitmap,int x,int y)
     {
         IntPtr screen=GetDC(IntPtr.Zero),memory=CreateCompatibleDC(screen),hBitmap=bitmap.GetHbitmap(Color.FromArgb(0)),old=SelectObject(memory,hBitmap);
         try { var size=new SIZE(bitmap.Width,bitmap.Height); var destination=new POINT(x,y); var source=new POINT(0,0); var blend=new BLENDFUNCTION{SourceConstantAlpha=255,AlphaFormat=1};
-            if(!UpdateLayeredWindow(Handle,screen,ref destination,ref size,memory,ref source,0,ref blend,2)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            if(!UpdateLayeredWindow(window,screen,ref destination,ref size,memory,ref source,0,ref blend,2)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         } finally { SelectObject(memory,old); DeleteObject(hBitmap); DeleteDC(memory); ReleaseDC(IntPtr.Zero,screen); }
     }
     public static void SelfTest()
