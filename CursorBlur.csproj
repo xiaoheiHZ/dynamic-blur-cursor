@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <UseWindowsForms>true</UseWindowsForms><ApplicationIcon>app.ico</ApplicationIcon>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>

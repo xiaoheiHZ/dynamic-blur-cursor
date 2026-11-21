@@ -41,6 +41,8 @@ internal sealed class SpringTrail
     private readonly Corner[] springs = new Corner[4];
     private readonly PointF[] vertices = new PointF[4];
 
+    internal static readonly Color Gold = Color.FromArgb(255, 183, 39);
+
     public void Reset() => Array.Clear(springs);
 
     public bool Advance(Rectangle previous, Rectangle current, float seconds, int presetIndex)
@@ -121,14 +123,12 @@ internal sealed class SpringTrail
             (int)MathF.Ceiling(vertices.Max(p => p.Y)) + glowMargin);
     }
 
-    public void Draw(Graphics graphics, Rectangle bounds, Color color, float strength)
+    public void Draw(Graphics graphics)
     {
-        graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.TranslateTransform(-bounds.X, -bounds.Y);
-        float alpha = strength * Opacity;
-        using var outer = new Pen(Color.FromArgb((int)(28 * alpha), color), 14) { LineJoin = LineJoin.Round };
-        using var inner = new Pen(Color.FromArgb((int)(56 * alpha), color), 7) { LineJoin = LineJoin.Round };
-        using var fill = new SolidBrush(Color.FromArgb((int)(235 * alpha), color));
+        float alpha = Opacity;
+        using var outer = new Pen(Color.FromArgb((int)(26 * alpha), Gold), 14) { LineJoin = LineJoin.Round };
+        using var inner = new Pen(Color.FromArgb((int)(76 * alpha), Gold), 7) { LineJoin = LineJoin.Round };
+        using var fill = new SolidBrush(Color.FromArgb((int)(200 * alpha), Gold));
         graphics.DrawPolygon(outer, vertices);
         graphics.DrawPolygon(inner, vertices);
         graphics.FillPolygon(fill, vertices);

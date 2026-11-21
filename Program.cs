@@ -66,6 +66,11 @@ internal sealed class BlurContext : ApplicationContext
         toggle = new ToolStripMenuItem("暂停特效", null, (_, _) => Toggle());
         var menu = new ContextMenuStrip();
         menu.Items.Add("个性化设置…", null, (_, _) => ShowSettings());
+        menu.Items.Add("触控板…", null, (_, _) =>
+        {
+            using var form = new TouchpadForm(appIcon);
+            form.ShowDialog();
+        });
         menu.Items.Add(toggle);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitThread());
@@ -135,7 +140,7 @@ internal sealed class SettingsForm : Form
         AddSlider(layout, 5, "指针拖影大小", size, "%");
         AddSlider(layout, 6, "拖影间距", spacing, " px");
         AddSlider(layout, 7, "指针倾斜幅度", tilt, "°（0 为关闭）");
-        AddRow(layout, 8, "柔光颜色", color);
+        AddRow(layout, 8, "鼠标拖尾颜色", color);
         layout.Controls.Add(startup, 0, 9); layout.SetColumnSpan(startup, 2);
         var note = new Label { Text = "更改立即生效，设置会自动保存。", AutoSize = true, ForeColor = Color.FromArgb(100, 110, 132), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
         layout.Controls.Add(note, 0, 10); layout.SetColumnSpan(note, 2);
@@ -224,20 +229,51 @@ internal sealed class BlurOverlay : Form
         if(copy!=IntPtr.Zero)
         {
             try {
-                if(GetIconInfo(copy,out var info)) { hotspot=new Point((int)info.xHotspot,(int)info.yHotspot); if(info.hbmMask!=IntPtr.Zero)DeleteObject(info.hbmMask); if(info.hbmColor!=IntPtr.Zero)DeleteObject(info.hbmColor); }
-                using var icon=Icon.FromHandle(copy); image=icon.ToBitmap();
+                if (GetIconInfo(copy, out var info))
+                {
+                    hotspot = new Point((int)info.xHotspot, (int)info.yHotspot);
+                    try
+                    {
+                        if (info.hbmColor == IntPtr.Zero && info.hbmMask != IntPtr.Zero)
+                            image = ReadMonochromeCursor(info.hbmMask);
+                    }
+                    finally
+                    {
+                        if (info.hbmMask != IntPtr.Zero) DeleteObject(info.hbmMask);
+                        if (info.hbmColor != IntPtr.Zero) DeleteObject(info.hbmColor);
+                    }
+                }
+                if (image is null)
+                {
+                    using var icon = Icon.FromHandle(copy);
+                    image = icon.ToBitmap();
+                }
             } catch (ArgumentException) { image?.Dispose(); image=null; }
             finally { DestroyIcon(copy); }
         }
         cursorImage?.Dispose(); cursorImage=image; cursorHotspot=hotspot;
     }
+
+    private static Bitmap ReadMonochromeCursor(IntPtr maskHandle)
+    {
+        using var mask = Image.FromHbitmap(maskHandle);
+        int height = mask.Height / 2;
+        var shape = new Bitmap(mask.Width, height, PixelFormat.Format32bppArgb);
+        // Windows stacks the AND mask above the XOR mask. Only white AND + black XOR is transparent.
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < mask.Width; x++)
+                if (mask.GetPixel(x, y).R == 0 || mask.GetPixel(x, y + height).R != 0)
+                    shape.SetPixel(x, y, Color.White);
+        return shape;
+    }
+
     private static void DrawTrail(Graphics g,List<Sample> points,long now,int left,int top,Settings settings,Bitmap? cursor,Point hotspot,Point current)
     {
         g.SmoothingMode=SmoothingMode.AntiAlias; g.InterpolationMode=InterpolationMode.HighQualityBicubic; g.CompositingMode=CompositingMode.SourceOver;
         float strength=settings.Opacity/100f;
+        Color tint=Color.FromArgb(settings.ColorArgb);
         if(settings.Style!=1 || cursor is null)
         {
-            Color tint=Color.FromArgb(settings.ColorArgb);
             for(int i=1;i<points.Count;i++)
             {
                 var a=points[i-1]; var b=points[i]; float dx=b.Position.X-a.Position.X,dy=b.Position.Y-a.Position.Y;
@@ -254,6 +290,12 @@ internal sealed class BlurOverlay : Form
         for(int i=1;i<points.Count;i++) { float dx=points[i].Position.X-points[i-1].Position.X,dy=points[i].Position.Y-points[i-1].Position.Y; totalDistance+=MathF.Sqrt(dx*dx+dy*dy); }
         float step=Math.Max(settings.Spacing,totalDistance/31f), next=0, travelled=0;
         using var attributes=new ImageAttributes();
+        // Use cursor alpha as a silhouette, including on black, white and inverted cursors.
+        var matrix = new ColorMatrix
+        {
+            Matrix00 = 0, Matrix11 = 0, Matrix22 = 0,
+            Matrix40 = tint.R / 255f, Matrix41 = tint.G / 255f, Matrix42 = tint.B / 255f,
+        };
         for(int i=1;i<points.Count && drawn<32;i++)
         {
             var a=points[i-1]; var b=points[i];
@@ -266,7 +308,8 @@ internal sealed class BlurOverlay : Form
                 if(MathF.Abs(x-current.X)+MathF.Abs(y-current.Y)<18) continue;
                 float age=now-(a.Time+(b.Time-a.Time)*f); float fade=Math.Clamp(1f-age/settings.Lifetime,0f,1f);
                 float alpha=Math.Clamp(strength*fade*fade*.72f,0f,.72f); if(alpha<.015f)continue;
-                var matrix=new ColorMatrix { Matrix33=alpha }; attributes.SetColorMatrix(matrix);
+                matrix.Matrix33 = alpha;
+                attributes.SetColorMatrix(matrix);
                 int w=Math.Max(1,(int)(cursor.Width*scale)),h=Math.Max(1,(int)(cursor.Height*scale));
                 var dest=new Rectangle((int)(x-left-hotspot.X*scale),(int)(y-top-hotspot.Y*scale),w,h);
                 g.DrawImage(cursor,dest,0,0,cursor.Width,cursor.Height,GraphicsUnit.Pixel,attributes); drawn++;
@@ -301,9 +344,37 @@ internal sealed class BlurOverlay : Form
         if(!drawn)throw new Exception("Trail drawing empty");
         using var ghosts=new Bitmap(300,150,PixelFormat.Format32bppPArgb);
         using(var g=Graphics.FromImage(ghosts))DrawTrail(g,samples,30,0,0,new Settings{Style=1},overlay.cursorImage,overlay.cursorHotspot,new Point(180,70));
-        bool ghostDrawn=false; for(int y=0;y<ghosts.Height;y++) for(int x=0;x<ghosts.Width;x++) if(ghosts.GetPixel(x,y).A>0)ghostDrawn=true;
-        if(!ghostDrawn)throw new Exception("Cursor-shaped trail drawing empty");
+        AssertTintedTrail(ghosts);
+
+        byte[] andMask = Enumerable.Repeat((byte)255, 32).ToArray();
+        byte[] xorMask = new byte[32];
+        for (int row = 0; row < 16; row++) xorMask[row * 2] = 0x18;
+        IntPtr inverted = CreateCursor(IntPtr.Zero, 0, 0, 16, 16, andMask, xorMask);
+        if (inverted == IntPtr.Zero) throw new InvalidOperationException("Could not create an inverted test cursor");
+        try { overlay.CaptureCursor(inverted, 10); }
+        finally { DestroyCursor(inverted); }
+        if (overlay.cursorImage is not { } invertedShape ||
+            invertedShape.GetPixel(3, 0).A != 255 || invertedShape.GetPixel(0, 0).A != 0)
+            throw new InvalidOperationException("Could not preserve the inverted cursor silhouette");
+        using var invertedTrail = new Bitmap(300, 150, PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(invertedTrail))
+            DrawTrail(g, samples, 30, 0, 0, new Settings { Style = 1 }, invertedShape, Point.Empty, new Point(180, 70));
+        AssertTintedTrail(invertedTrail);
         using var form=new SettingsForm(new Settings(),SystemIcons.Application); form.CreateControl();
+    }
+    private static void AssertTintedTrail(Bitmap trail)
+    {
+        bool found = false;
+        for (int y = 0; y < trail.Height; y++)
+            for (int x = 0; x < trail.Width; x++)
+            {
+                Color pixel = trail.GetPixel(x, y);
+                if (pixel.A < 16) continue;
+                if (pixel.B <= pixel.R)
+                    throw new InvalidOperationException("A mouse trail pixel lost its color");
+                found = true;
+            }
+        if (!found) throw new InvalidOperationException("Cursor-shaped trail drawing empty");
     }
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X,Y; public POINT(int x,int y){X=x;Y=y;} }
     [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx,cy; public SIZE(int x,int y){cx=x;cy=y;} }
@@ -313,6 +384,8 @@ internal sealed class BlurOverlay : Form
     [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO ci);
     [DllImport("user32.dll")] private static extern IntPtr CopyIcon(IntPtr icon);
     [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("user32.dll")] private static extern IntPtr CreateCursor(IntPtr instance, int x, int y, int width, int height, byte[] andMask, byte[] xorMask);
+    [DllImport("user32.dll")] private static extern bool DestroyCursor(IntPtr cursor);
     [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr icon,out ICONINFO info);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd,IntPtr dc);

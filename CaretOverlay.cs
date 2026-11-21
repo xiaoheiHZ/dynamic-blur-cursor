@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
@@ -14,7 +15,7 @@ internal sealed class CaretOverlay : Form
     private CaretPosition? previous;
     private long lastTick;
     private int style;
-    private bool drawn;
+    private bool drawn, animating;
     private bool enabledEffect = true;
 
     public CaretOverlay(Settings settings)
@@ -69,23 +70,28 @@ internal sealed class CaretOverlay : Form
 
     private void DrawFrame(CaretPosition? current, long elapsed)
     {
-        if (current is not { } caret || previous is not { } last ||
-            elapsed > 100 || caret.Owner != last.Owner || caret.Client != last.Client ||
-            caret.Bounds.Height != last.Bounds.Height)
+        if (current is not { } caret)
         {
             ResetTrail();
-            previous = current;
             return;
         }
 
-        previous = current;
-        if (!spring.Advance(last.Bounds, caret.Bounds, elapsed / 1000f, style - 1))
+        if (current == previous && drawn && !animating) return;
+        Rectangle core = BoldBounds(caret.Bounds);
+        if (previous is { } last && elapsed <= 100 &&
+            caret.Owner == last.Owner && caret.Client == last.Client && caret.Bounds.Height == last.Bounds.Height)
         {
-            ClearOverlay();
-            return;
+            animating = spring.Advance(last.Bounds, caret.Bounds, elapsed / 1000f, style - 1);
         }
+        else
+        {
+            spring.Reset();
+            animating = false;
+        }
+        previous = current;
 
-        Rectangle bounds = Rectangle.Intersect(spring.Bounds(), caret.Client);
+        Rectangle glow = Rectangle.Inflate(core, 9, 8);
+        Rectangle bounds = Rectangle.Intersect(animating ? Rectangle.Union(spring.Bounds(), glow) : glow, caret.Client);
         if (bounds.Width <= 0 || bounds.Height <= 0)
         {
             ClearOverlay();
@@ -93,15 +99,39 @@ internal sealed class CaretOverlay : Form
         }
         using var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppPArgb);
         using (var graphics = Graphics.FromImage(bitmap))
-            spring.Draw(graphics, bounds, Color.FromArgb(settings.ColorArgb), settings.Opacity / 100f);
+        {
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            graphics.TranslateTransform(-bounds.X, -bounds.Y);
+            if (animating) spring.Draw(graphics);
+            DrawGoldCaret(graphics, core);
+        }
         BlurOverlay.SetBitmap(Handle, bitmap, bounds.X, bounds.Y);
         drawn = true;
+    }
+
+    private static Rectangle BoldBounds(Rectangle caret)
+    {
+        int width = Math.Max(caret.Width + 2, Math.Clamp(caret.Height / 5, 4, 12));
+        return new Rectangle(caret.Left - (width - caret.Width) / 2, caret.Top, width, caret.Height);
+    }
+
+    private static void DrawGoldCaret(Graphics graphics, Rectangle core)
+    {
+        using var outer = new SolidBrush(Color.FromArgb(20, SpringTrail.Gold));
+        using var middle = new SolidBrush(Color.FromArgb(45, SpringTrail.Gold));
+        using var inner = new SolidBrush(Color.FromArgb(93, SpringTrail.Gold));
+        graphics.FillEllipse(outer, Rectangle.Inflate(core, 8, 8));
+        graphics.FillEllipse(middle, Rectangle.Inflate(core, 5, 5));
+        graphics.FillEllipse(inner, Rectangle.Inflate(core, 3, 2));
+        using var highlight = new LinearGradientBrush(core, Color.FromArgb(255, 224, 130), SpringTrail.Gold, LinearGradientMode.Horizontal);
+        graphics.FillRectangle(highlight, core);
     }
 
     private void ResetTrail()
     {
         previous = null;
         spring.Reset();
+        animating = false;
         ClearOverlay();
     }
 
@@ -146,15 +176,15 @@ internal sealed class CaretOverlay : Form
                 overlay.ResetTrail();
                 SetCaretPos(12, 10);
                 overlay.DrawFrame(overlay.tracker.Read(form.Handle, thread), 16);
-                if (overlay.previous is null)
-                    throw new InvalidOperationException("Could not read the text box caret");
+                if (!overlay.drawn || overlay.animating)
+                    throw new InvalidOperationException("Could not draw a stationary caret");
                 SetCaretPos(105, 32);
                 var moved = overlay.tracker.Read(form.Handle, thread);
                 overlay.DrawFrame(moved, 16);
-                if (!overlay.drawn)
+                if (!overlay.drawn || !overlay.animating)
                     throw new InvalidOperationException($"Text caret movement did not draw preset {preset}");
                 for (int frame = 0; frame < 24; frame++) overlay.DrawFrame(moved, 16);
-                if (overlay.drawn)
+                if (!overlay.drawn || overlay.animating)
                     throw new InvalidOperationException($"Text caret preset {preset} did not settle");
             }
             SetCaretPos(12, 10);
@@ -162,6 +192,14 @@ internal sealed class CaretOverlay : Form
             overlay.EnabledEffect = false;
             if (overlay.drawn)
                 throw new InvalidOperationException("Pausing did not clear the caret overlay");
+
+            using var bitmap = new Bitmap(40, 40, PixelFormat.Format32bppPArgb);
+            Rectangle core = BoldBounds(new Rectangle(20, 11, 2, 18));
+            using (var graphics = Graphics.FromImage(bitmap)) DrawGoldCaret(graphics, core);
+            Color gold = bitmap.GetPixel(core.Left, core.Top + 9);
+            if (core.Width < 4 || gold.A != 255 || gold.R <= gold.G || gold.G <= gold.B ||
+                bitmap.GetPixel(core.Left - 3, core.Top + 9).A == 0)
+                throw new InvalidOperationException("Caret did not render a thick gold core and glow");
         }
         finally { DestroyCaret(); }
     }
