@@ -17,9 +17,10 @@ internal static class TouchpadProfile
     private const uint HonorMouseAcceleration = 1 << 6;
     private const uint Pan = 1 << 7;
     private const uint Pinch = 1 << 8;
-    private const uint NaturalScroll = 1 << 9;
-    private const uint MacFlags = Tap | TapAndDrag | TwoFingerTap | Pan | Pinch | NaturalScroll;
-    private const uint ProfileMask = MacFlags | CornerRightClick | HonorMouseAcceleration;
+    // Clearing the reverse bit gives Windows' "Down motion scrolls up" direction.
+    private const uint ReverseScroll = 1 << 9;
+    private const uint MacFlags = Tap | TapAndDrag | TwoFingerTap | Pan | Pinch;
+    private const uint ProfileMask = MacFlags | CornerRightClick | HonorMouseAcceleration | ReverseScroll;
     private const string BackupKey = @"Software\CursorBlur";
     private const string BackupValue = "TouchpadFlagsBeforePreset";
 
